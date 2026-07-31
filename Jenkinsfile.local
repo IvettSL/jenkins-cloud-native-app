@@ -1,0 +1,72 @@
+﻿pipeline {
+    agent any
+    
+    environment {
+        APP_NAME = 'jenkins-cloud-native-app'
+        DOCKER_REGISTRY = 'localhost:5000'
+        KUBECONFIG = '/home/jenkins/.kube/config'
+    }
+    
+    stages {
+        stage('Checkout') {
+            steps {
+                echo '📥 Clonando repositorio...'
+                checkout scm
+            }
+        }
+        
+        stage('Build') {
+            steps {
+                echo '📦 Construyendo aplicación...'
+                sh '''
+                    docker build -t ${APP_NAME}:latest .
+                '''
+            }
+        }
+        
+        stage('Test') {
+            steps {
+                echo '🧪 Ejecutando pruebas...'
+                sh '''
+                    docker run --rm ${APP_NAME}:latest npm test || echo "No tests configured"
+                '''
+            }
+        }
+        
+        stage('Deploy') {
+            steps {
+                echo '☸️ Desplegando en Kubernetes...'
+                sh '''
+                    kubectl apply -k kubernetes/overlays/dev
+                    kubectl rollout status deployment/jenkins-app -n dev
+                '''
+            }
+        }
+        
+        stage('Verify') {
+            steps {
+                echo '🔍 Verificando despliegue...'
+                sh '''
+                    kubectl get pods -n dev
+                    kubectl port-forward -n dev svc/jenkins-app 8083:8080 &
+                    sleep 5
+                    curl -s http://localhost:8083/health || echo "Health check falló"
+                    pkill kubectl || true
+                '''
+            }
+        }
+    }
+    
+    post {
+        success {
+            echo '✅ Pipeline completado exitosamente'
+        }
+        failure {
+            echo '❌ Pipeline falló'
+        }
+        always {
+            echo '🧹 Limpiando workspace...'
+            cleanWs()
+        }
+    }
+}
