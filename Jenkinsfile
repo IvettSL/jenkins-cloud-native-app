@@ -1,49 +1,37 @@
 pipeline {
-    agent { label 'built-in' }
+    agent {
+        label 'docker-agent'  // ? Usa el agente con Docker
+    }
     
     stages {
         stage('Checkout') {
-            steps {
-                echo '?? Clonando repositorio...'
-                checkout scm
-            }
+            steps { checkout scm }
         }
-        
         stage('Build') {
             steps {
-                echo '?? Construyendo imagen Docker...'
                 sh '''
-                    echo "=== Verificando herramientas ==="
-                    docker --version || echo "Docker no disponible en built-in"
+                    echo "=== Verificando Docker ==="
+                    docker --version
                     
                     echo "=== Construyendo imagen ==="
-                    docker build -t jenkins-cloud-native-app:latest . || echo "Docker build fall?"
+                    docker build -t jenkins-cloud-native-app:latest .
                 '''
             }
         }
-        
         stage('Deploy') {
             steps {
-                echo '?? Desplegando en Kubernetes...'
                 sh '''
-                    echo "=== Cargando imagen en Minikube ==="
-                    minikube image load jenkins-cloud-native-app:latest 2>/dev/null || echo "Minikube no disponible"
-                    
-                    echo "=== Desplegando ==="
+                    echo "=== Desplegando en Kubernetes ==="
                     kubectl apply -k kubernetes/overlays/dev
                     kubectl rollout status deployment/jenkins-app -n dev --timeout=120s
                 '''
             }
         }
-        
         stage('Test') {
             steps {
-                echo '?? Verificando despliegue...'
                 sh '''
-                    echo "=== Pods ==="
+                    echo "=== Verificando despliegue ==="
                     kubectl get pods -n dev
-                    
-                    echo "=== Servicios ==="
                     kubectl get svc -n dev
                 '''
             }
@@ -51,14 +39,8 @@ pipeline {
     }
     
     post {
-        success {
-            echo '? Pipeline completado exitosamente!'
-        }
-        failure {
-            echo '? Pipeline fall?!'
-        }
-        always {
-            cleanWs()
-        }
+        success { echo '? Pipeline exitoso!' }
+        failure { echo '? Pipeline fall?!' }
+        always { cleanWs() }
     }
 }
