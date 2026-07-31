@@ -6,24 +6,40 @@ resources:
 
 namespace: dev
 
-patchesStrategicMerge:
-- deployment-patch.yaml
-
-configMapGenerator:
-- name: app-config
-  literals:
-  - environment=dev
-  - log-level=debug
-
-secretGenerator:
-- name: app-secrets
-  literals:
-  - db-host=dev-postgres.rds.amazonaws.com
-  - db-user=appuser
-  - db-password=devPassword123!
-  - db-name=appdb
-
 images:
 - name: jenkins-cloud-native-app
-  newName: 123456789012.dkr.ecr.us-east-1.amazonaws.com/jenkins-cloud-native-app
+  newName: jenkins-cloud-native-app
   newTag: latest
+
+
+
+
+# apiVersion: kustomize.config.k8s.io/v1beta1
+# kind: Kustomization
+
+# resources:
+# - ../../base
+
+# namespace: dev
+
+# patchesStrategicMerge:
+# - deployment-patch.yaml
+
+# configMapGenerator:
+# - name: app-config
+#   literals:
+#   - environment=dev
+#   - log-level=debug
+
+# secretGenerator:
+# - name: app-secrets
+#   literals:
+#   - db-host=dev-postgres.rds.amazonaws.com
+#   - db-user=appuser
+#   - db-password=devPassword123!
+#   - db-name=appdb
+
+# images:
+# - name: jenkins-cloud-native-app
+#   newName: 123456789012.dkr.ecr.us-east-1.amazonaws.com/jenkins-cloud-native-app
+#   newTag: latest
