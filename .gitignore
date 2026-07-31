@@ -1,0 +1,38 @@
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.env
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+terraform.tfvars
+*.tfvars
+terraform.plan
+outputs.json
+
+# Kubernetes
+*.kubeconfig
+*.secret.yaml
+
+# Test
+coverage/
+.nyc_output/
+
+# Build
+dist/
+build/

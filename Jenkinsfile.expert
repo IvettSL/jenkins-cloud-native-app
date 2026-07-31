@@ -1,0 +1,303 @@
+pipeline {
+    agent none
+    
+    environment {
+        APP_NAME = 'jenkins-cloud-native-app'
+        ENVIRONMENT = params.ENVIRONMENT ?: 'dev'
+        AWS_REGION = 'us-east-1'
+        TF_STATE_BUCKET = 'jenkins-tf-state'
+        DOCKER_REGISTRY = '123456789012.dkr.ecr.us-east-1.amazonaws.com'
+        GIT_COMMIT = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
+        BUILD_TIMESTAMP = sh(script: 'date +%Y%m%d%H%M%S', returnStdout: true).trim()
+    }
+    
+    parameters {
+        choice(
+            name: 'ENVIRONMENT',
+            choices: ['dev', 'staging', 'production'],
+            description: 'Ambiente de despliegue'
+        )
+        string(
+            name: 'APP_VERSION',
+            defaultValue: 'latest',
+            description: 'Versión de la aplicación'
+        )
+        booleanParam(
+            name: 'DEPLOY_INFRASTRUCTURE',
+            defaultValue: false,
+            description: 'Desplegar infraestructura con Terraform'
+        )
+        booleanParam(
+            name: 'RUN_CHAOS_EXPERIMENTS',
+            defaultValue: false,
+            description: 'Ejecutar experimentos de Chaos Engineering'
+        )
+    }
+    
+    stages {
+        stage('Validación de Código y Seguridad') {
+            parallel {
+                stage('Análisis de Código') {
+                    agent {
+                        docker {
+                            image 'sonarsource/sonar-scanner-cli:latest'
+                        }
+                    }
+                    steps {
+                        echo '🔍 Analizando código con SonarQube...'
+                        withSonarQubeEnv('SonarQube') {
+                            sh """
+                                sonar-scanner \\
+                                    -Dsonar.projectKey=${APP_NAME} \\
+                                    -Dsonar.sources=. \\
+                                    -Dsonar.host.url=${SONAR_HOST_URL} \\
+                                    -Dsonar.login=${SONAR_TOKEN}
+                            """
+                        }
+                    }
+                }
+                
+                stage('Escaneo de Vulnerabilidades') {
+                    agent {
+                        docker {
+                            image 'aquasec/trivy:latest'
+                        }
+                    }
+                    steps {
+                        echo '🔐 Escaneando dependencias...'
+                        sh """
+                            trivy fs --severity HIGH,CRITICAL --exit-code 0 .
+                            trivy image ${DOCKER_REGISTRY}/${APP_NAME}:${APP_VERSION} --severity HIGH,CRITICAL || true
+                        """
+                    }
+                }
+            }
+        }
+        
+        stage('Infraestructura como Código') {
+            when {
+                expression { params.DEPLOY_INFRASTRUCTURE }
+            }
+            agent { label 'docker' }
+            environment {
+                TF_VAR_environment = ENVIRONMENT
+                TF_VAR_aws_region = AWS_REGION
+            }
+            steps {
+                echo '🏗️ Desplegando infraestructura con Terraform...'
+                script {
+                    sh """
+                        cd infrastructure/terraform/environments/${ENVIRONMENT}
+                        
+                        # Inicializar Terraform
+                        terraform init \\
+                            -backend-config="bucket=${TF_STATE_BUCKET}" \\
+                            -backend-config="key=${APP_NAME}/${ENVIRONMENT}/terraform.tfstate"
+                        
+                        # Planificar cambios
+                        terraform plan -out=tfplan
+                        
+                        # Aplicar cambios
+                        if [ "${ENVIRONMENT}" == "production" ]; then
+                            echo "📝 Revisión manual requerida para producción"
+                            input message: '¿Aprobar despliegue en producción?', ok: 'Sí'
+                        fi
+                        
+                        terraform apply tfplan
+                        
+                        # Guardar outputs
+                        terraform output -json > outputs.json
+                    """
+                }
+            }
+        }
+        
+        stage('Build y Push de Imágenes') {
+            agent { label 'docker' }
+            steps {
+                echo '🏗️ Construyendo y subiendo imágenes...'
+                script {
+                    sh """
+                        # Login a ECR
+                        aws ecr get-login-password --region ${AWS_REGION} | \\
+                            docker login --username AWS --password-stdin ${DOCKER_REGISTRY}
+                        
+                        # Construir imagen
+                        docker build \\
+                            --tag ${DOCKER_REGISTRY}/${APP_NAME}:${APP_VERSION} \\
+                            --tag ${DOCKER_REGISTRY}/${APP_NAME}:${BUILD_TIMESTAMP} \\
+                            .
+                        
+                        # Subir imágenes
+                        docker push ${DOCKER_REGISTRY}/${APP_NAME}:${APP_VERSION}
+                        docker push ${DOCKER_REGISTRY}/${APP_NAME}:${BUILD_TIMESTAMP}
+                    """
+                }
+            }
+        }
+        
+        stage('Despliegue Kubernetes') {
+            agent { label 'docker' }
+            steps {
+                echo '☸️ Desplegando en Kubernetes...'
+                script {
+                    sh """
+                        ./scripts/deploy.sh ${ENVIRONMENT}
+                    """
+                }
+            }
+        }
+        
+        stage('Auto-Scaling') {
+            when {
+                expression { ENVIRONMENT == 'production' }
+            }
+            agent { label 'docker' }
+            steps {
+                echo '📈 Configurando auto-scaling...'
+                script {
+                    sh """
+                        kubectl apply -f - <<EOF
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: ${APP_NAME}-hpa
+  namespace: ${ENVIRONMENT}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: ${APP_NAME}
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+EOF
+                    """
+                }
+            }
+        }
+        
+        stage('Chaos Engineering') {
+            when {
+                expression { params.RUN_CHAOS_EXPERIMENTS && ENVIRONMENT != 'production' }
+            }
+            agent { label 'docker' }
+            steps {
+                echo '🧪 Ejecutando experimentos de Chaos Engineering...'
+                script {
+                    sh """
+                        # Crear namespace para chaos
+                        kubectl create ns chaos-testing --dry-run=client -o yaml | kubectl apply -f -
+                        
+                        # Aplicar experimentos
+                        kubectl apply -f chaos/experiments/
+                        
+                        # Ejecutar experimentos
+                        kubectl apply -f - <<EOF
+apiVersion: litmuschaos.io/v1alpha1
+kind: ChaosEngine
+metadata:
+  name: pod-failure-engine
+  namespace: chaos-testing
+spec:
+  appinfo:
+    appns: ${ENVIRONMENT}
+    applabel: app=${APP_NAME}
+    appkind: deployment
+  jobCleanUpPolicy: delete
+  experiments:
+  - name: pod-failure
+    spec:
+      components:
+        env:
+        - name: TOTAL_CHAOS_DURATION
+          value: '30'
+        - name: CHAOS_INTERVAL
+          value: '10'
+        - name: PODS_AFFECTED_PERC
+          value: '30'
+EOF
+                    """
+                }
+            }
+        }
+        
+        stage('Monitoreo y Alertas') {
+            agent { label 'docker' }
+            steps {
+                echo '📊 Configurando monitoreo avanzado...'
+                script {
+                    sh """
+                        # Aplicar reglas de alerta
+                        kubectl apply -f monitoring/alertmanager/rules.yml
+                        
+                        # Configurar dashboards
+                        kubectl create configmap grafana-dashboards \\
+                            --from-file=monitoring/grafana/dashboards/ \\
+                            -n monitoring --dry-run=client -o yaml | kubectl apply -f - || true
+                        
+                        # Verificar métricas
+                        ./scripts/monitor.sh ${ENVIRONMENT}
+                    """
+                }
+            }
+        }
+    }
+    
+    post {
+        success {
+            echo '✅ Pipeline completado exitosamente'
+            emailext (
+                subject: "✅ Pipeline exitoso: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                body: """
+                    El pipeline cloud-native se completó correctamente.
+                    
+                    Ambiente: ${ENVIRONMENT}
+                    Versión: ${APP_VERSION}
+                    URL: ${env.BUILD_URL}
+                    Imágenes: ${DOCKER_REGISTRY}/${APP_NAME}
+                """,
+                to: 'equipo-dev@ejemplo.com'
+            )
+        }
+        
+        failure {
+            echo '❌ Pipeline falló. Iniciando rollback...'
+            script {
+                sh """
+                    ./scripts/rollback.sh ${ENVIRONMENT}
+                """
+            }
+            emailext (
+                subject: "❌ Pipeline fallido: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                body: """
+                    El pipeline cloud-native falló.
+                    
+                    Ambiente: ${ENVIRONMENT}
+                    URL: ${env.BUILD_URL}
+                    Rollback automático ejecutado.
+                    
+                    Revisa los logs para más detalles.
+                """,
+                to: 'equipo-dev@ejemplo.com'
+            )
+        }
+        
+        always {
+            echo '🧹 Limpiando workspace...'
+            cleanWs()
+        }
+    }
+}

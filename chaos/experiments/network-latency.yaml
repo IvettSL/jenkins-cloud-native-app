@@ -1,0 +1,46 @@
+apiVersion: litmuschaos.io/v1alpha1
+kind: ChaosExperiment
+metadata:
+  name: network-latency
+  namespace: chaos-testing
+spec:
+  definition:
+    scope: Namespaced
+    permissions:
+    - apiGroups:
+      - ""
+      - "apps"
+      - "litmuschaos.io"
+      resources:
+      - "deployments"
+      - "replicasets"
+      - "pods"
+      - "jobs"
+      verbs:
+      - "create"
+      - "list"
+      - "get"
+      - "patch"
+      - "update"
+      - "delete"
+      - "deletecollection"
+    image: "litmuschaos/go-runner:latest"
+    args:
+    - -c
+    - ./experiments -name network-latency
+    command:
+    - /bin/bash
+    env:
+    - name: TOTAL_CHAOS_DURATION
+      value: '120'
+    - name: NETWORK_LATENCY
+      value: '300'
+    - name: JITTER
+      value: '100'
+    - name: TARGET_PODS
+      value: ''
+    labels:
+      name: network-latency
+      app.kubernetes.io/part-of: litmus
+      app.kubernetes.io/component: experiment
+      app.kubernetes.io/version: latest
