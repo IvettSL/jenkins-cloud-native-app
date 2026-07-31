@@ -1,45 +1,81 @@
 pipeline {
-    agent any
+    // Usar el nodo principal de Jenkins (donde está Docker)
+    agent { label 'built-in' }
+    
+    environment {
+        APP_NAME = 'jenkins-cloud-native-app'
+        NAMESPACE = 'dev'
+    }
     
     stages {
         stage('Checkout') {
             steps {
-                echo 'Checkout'
+                echo '📥 Clonando repositorio...'
                 checkout scm
             }
         }
         
-        stage('Build') {
+        stage('Build Docker Image') {
             steps {
-                echo 'Build'
-                // Usar Docker desde el host (no desde el contenedor)
+                echo '🐳 Construyendo imagen Docker...'
                 sh '''
-                    # Verificar si Docker está disponible
-                    if ! command -v docker &> /dev/null; then
-                        echo "Docker no encontrado, usando alternativa..."
-                        # Intentar con Docker desde el host
-                        docker --version || echo "Docker no disponible"
-                    fi
+                    echo "=== Construyendo imagen ==="
+                    docker build -t ${APP_NAME}:latest .
+                    
+                    echo "=== Cargando imagen en Minikube ==="
+                    minikube image load ${APP_NAME}:latest || echo "Minikube image load falló, continuando..."
                 '''
             }
         }
         
-        stage('Deploy') {
+        stage('Deploy to Kubernetes') {
             steps {
-                echo 'Deploy'
+                echo '☸️ Desplegando en Kubernetes...'
                 sh '''
-                    # Usar minikube para cargar imagen
-                    minikube image load jenkins-cloud-native-app:latest 2>/dev/null || echo "Minikube no disponible"
-                    kubectl apply -k kubernetes/overlays/dev 2>/dev/null || echo "Kubectl no disponible"
+                    echo "=== Asegurando namespace ==="
+                    kubectl create namespace ${NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -
+                    
+                    echo "=== Desplegando aplicación ==="
+                    kubectl apply -k kubernetes/overlays/dev
+                    
+                    echo "=== Esperando despliegue ==="
+                    kubectl rollout status deployment/jenkins-app -n ${NAMESPACE} --timeout=120s
+                    
+                    echo "=== Verificando pods ==="
+                    kubectl get pods -n ${NAMESPACE}
                 '''
             }
         }
         
-        stage('Test') {
+        stage('Verify Deployment') {
             steps {
-                echo 'Test'
-                sh 'kubectl get pods -n dev 2>/dev/null || echo "Kubectl no disponible"'
+                echo '🔍 Verificando despliegue...'
+                sh '''
+                    echo "=== Servicios ==="
+                    kubectl get svc -n ${NAMESPACE}
+                    
+                    echo "=== Health Check ==="
+                    MINIKUBE_IP=$(minikube ip)
+                    NODE_PORT=$(kubectl get svc jenkins-app -n ${NAMESPACE} -o jsonpath='{.spec.ports[0].nodePort}')
+                    echo "🌐 Aplicación en: http://${MINIKUBE_IP}:${NODE_PORT}"
+                    
+                    # Probar health check
+                    sleep 5
+                    curl -s "http://${MINIKUBE_IP}:${NODE_PORT}/health" && echo " ✅ Health check OK" || echo " ⚠️ Health check falló"
+                '''
             }
+        }
+    }
+    
+    post {
+        success {
+            echo '✅ Pipeline completado exitosamente!'
+        }
+        failure {
+            echo '❌ Pipeline falló!'
+        }
+        always {
+            cleanWs()
         }
     }
 }
