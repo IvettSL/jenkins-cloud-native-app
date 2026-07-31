@@ -1,67 +1,44 @@
 pipeline {
-    // Usar el nodo principal de Jenkins (donde está Docker)
     agent { label 'built-in' }
-    
-    environment {
-        APP_NAME = 'jenkins-cloud-native-app'
-        NAMESPACE = 'dev'
-    }
     
     stages {
         stage('Checkout') {
             steps {
-                echo '📥 Clonando repositorio...'
                 checkout scm
             }
         }
         
-        stage('Build Docker Image') {
+        stage('Build') {
             steps {
-                echo '🐳 Construyendo imagen Docker...'
                 sh '''
-                    echo "=== Construyendo imagen ==="
-                    docker build -t ${APP_NAME}:latest .
-                    
-                    echo "=== Cargando imagen en Minikube ==="
-                    minikube image load ${APP_NAME}:latest || echo "Minikube image load falló, continuando..."
+                    echo "?? Construyendo imagen Docker..."
+                    docker build -t jenkins-cloud-native-app:latest .
+                    minikube image load jenkins-cloud-native-app:latest
                 '''
             }
         }
         
-        stage('Deploy to Kubernetes') {
+        stage('Deploy') {
             steps {
-                echo '☸️ Desplegando en Kubernetes...'
                 sh '''
-                    echo "=== Asegurando namespace ==="
-                    kubectl create namespace ${NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -
-                    
-                    echo "=== Desplegando aplicación ==="
+                    echo "?? Desplegando en Kubernetes..."
                     kubectl apply -k kubernetes/overlays/dev
-                    
-                    echo "=== Esperando despliegue ==="
-                    kubectl rollout status deployment/jenkins-app -n ${NAMESPACE} --timeout=120s
-                    
-                    echo "=== Verificando pods ==="
-                    kubectl get pods -n ${NAMESPACE}
+                    kubectl rollout status deployment/jenkins-app -n dev --timeout=120s
                 '''
             }
         }
         
-        stage('Verify Deployment') {
+        stage('Test') {
             steps {
-                echo '🔍 Verificando despliegue...'
                 sh '''
-                    echo "=== Servicios ==="
-                    kubectl get svc -n ${NAMESPACE}
-                    
-                    echo "=== Health Check ==="
+                    echo "?? Verificando despliegue..."
+                    kubectl get pods -n dev
                     MINIKUBE_IP=$(minikube ip)
-                    NODE_PORT=$(kubectl get svc jenkins-app -n ${NAMESPACE} -o jsonpath='{.spec.ports[0].nodePort}')
-                    echo "🌐 Aplicación en: http://${MINIKUBE_IP}:${NODE_PORT}"
+                    NODE_PORT=$(kubectl get svc jenkins-app -n dev -o jsonpath='{.spec.ports[0].nodePort}')
+                    echo "?? Aplicaci?n: http://${MINIKUBE_IP}:${NODE_PORT}"
                     
-                    # Probar health check
-                    sleep 5
-                    curl -s "http://${MINIKUBE_IP}:${NODE_PORT}/health" && echo " ✅ Health check OK" || echo " ⚠️ Health check falló"
+                    # Health check
+                    curl -s "http://${MINIKUBE_IP}:${NODE_PORT}/health" && echo " ? Health check OK" || echo " ?? Health check fall?"
                 '''
             }
         }
@@ -69,10 +46,10 @@ pipeline {
     
     post {
         success {
-            echo '✅ Pipeline completado exitosamente!'
+            echo '? Pipeline completado exitosamente!'
         }
         failure {
-            echo '❌ Pipeline falló!'
+            echo '? Pipeline fall?!'
         }
         always {
             cleanWs()
