@@ -1,6 +1,6 @@
 pipeline {
     agent {
-        label 'built-in'
+        label 'docker-agent'
     }
     
     environment {
@@ -10,14 +10,33 @@ pipeline {
     stages {
         stage('Checkout') {
             steps {
+                echo '?? Clonando repositorio...'
                 checkout scm
+            }
+        }
+        
+        stage('Build') {
+            steps {
+                echo '?? Construyendo imagen Docker...'
+                sh '''
+                    echo "=== Verificando herramientas ==="
+                    docker --version
+                    kubectl version --client
+                    
+                    echo "=== Construyendo imagen ==="
+                    docker build -t jenkins-cloud-native-app:latest .
+                    
+                    echo "=== Cargando en Minikube ==="
+                    minikube image load jenkins-cloud-native-app:latest || echo "Minikube no disponible"
+                '''
             }
         }
         
         stage('Deploy') {
             steps {
+                echo '?? Desplegando en Kubernetes...'
                 sh '''
-                    echo "?? Desplegando en Kubernetes..."
+                    echo "=== Desplegando ==="
                     kubectl apply -k kubernetes/overlays/${NAMESPACE}
                     kubectl rollout status deployment/jenkins-app -n ${NAMESPACE} --timeout=120s
                 '''
@@ -26,9 +45,12 @@ pipeline {
         
         stage('Verify') {
             steps {
+                echo '?? Verificando despliegue...'
                 sh '''
-                    echo "?? Verificando..."
+                    echo "=== Pods ==="
                     kubectl get pods -n ${NAMESPACE}
+                    
+                    echo "=== Servicios ==="
                     kubectl get svc -n ${NAMESPACE}
                 '''
             }
@@ -37,10 +59,13 @@ pipeline {
     
     post {
         success {
-            echo '? Pipeline exitoso!'
+            echo '? Pipeline completado exitosamente!'
         }
         failure {
             echo '? Pipeline fall?!'
+        }
+        always {
+            cleanWs()
         }
     }
 }
